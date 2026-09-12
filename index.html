@@ -409,12 +409,14 @@
   let mapReady = false;
   let pendingGeofence = null;
 
-  function initMap() {
+    function initMap() {
     if (mapReady) return;
     mapReady = true;
     map = L.map('map', { zoomControl: true }).setView([20.5937, 78.9629], 5);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 19
+    
+    // API key අවශ්‍ය නොවන නොමිලේ ක්‍රියාත්මක වන OpenStreetMap tiles වෙත මාරු කිරීම
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors', maxZoom: 19
     }).addTo(map);
 
     const carIcon = L.divIcon({
