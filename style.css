@@ -10,7 +10,7 @@
   .mono{ font-family:'JetBrains Mono', monospace; }
 
   #loginScreen{ position:fixed; inset:0; background:var(--bg); display:flex; align-items:center; justify-content:center; z-index:100; }
-  .login-box{ width:320px; padding:28px; background:var(--panel); border:1px solid var(--line); position:relative; }
+  .login-box{ width:min(320px, 90vw); padding:28px; background:var(--panel); border:1px solid var(--line); position:relative; }
   .corner{ position:absolute; width:10px; height:10px; border:1.5px solid var(--live); }
   .corner.tl{ top:-1px; left:-1px; border-right:none; border-bottom:none; }
   .corner.tr{ top:-1px; right:-1px; border-left:none; border-bottom:none; }
@@ -31,8 +31,7 @@
 
   #app{ display:none; height:100vh; grid-template-columns: 1fr 340px; }
   #app.visible{ display:grid; }
-  #map{ height:100vh; filter: brightness(0.8) invert(100%) contrast(90%) hue-rotate(200deg) saturate(0.3); }
-
+  #map{ height:100vh; filter: saturate(0.85) brightness(0.9); }
 
   #sidebar{ background:var(--panel); border-left:1px solid var(--line); display:flex; flex-direction:column; height:100vh; overflow-y:auto; }
   .side-header{ padding:16px 18px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; }
@@ -76,3 +75,56 @@
   ::-webkit-scrollbar{ width:6px; }
   ::-webkit-scrollbar-thumb{ background:var(--line-strong); }
   .save-msg{ font-size:11px; color:var(--live); height:14px; margin-top:6px; }
+
+/* ==========================================================================
+   RESPONSIVE LAYOUT
+   Desktop keeps the map+sidebar side-by-side grid above. Below ~900px
+   (tablets and phones) it switches to a stacked layout: map on top at a
+   fixed height, sidebar below flowing normally with its own scroll —
+   because a 340px-wide sidebar squeezed next to a map on a phone screen
+   is unusable, and a full-height map with a sidebar you can't reach
+   without scrolling sideways is worse.
+   ========================================================================== */
+@media (max-width: 900px) {
+  #app.visible{
+    display:flex;
+    flex-direction:column;
+    height:100vh;
+  }
+  #map{
+    height:42vh;
+    flex-shrink:0;
+  }
+  #sidebar{
+    border-left:none;
+    border-top:1px solid var(--line);
+    flex:1;
+    height:auto;
+    min-height:0; /* lets it actually scroll inside a flex column */
+  }
+  .panel{ margin:10px; padding:12px; }
+  .side-header{ padding:12px 14px; }
+  .side-header h1{ font-size:14px; }
+  #connBadge{ top:8px; left:8px; }
+}
+
+/* Below ~420px (small phones in portrait) — tighten further and make sure
+   tap targets (buttons, toggle switches, inputs) stay comfortably usable. */
+@media (max-width: 420px) {
+  #map{ height:36vh; }
+  .stat-grid{ gap:8px; }
+  .stat .value{ font-size:14px; }
+  button{ padding:11px 14px; } /* a bit taller than desktop for easier tapping */
+  input{ padding:11px 12px; }
+  .switch{ width:46px; height:26px; }
+  .slider:before{ height:18px; width:18px; }
+  input:checked + .slider:before{ transform:translateX(20px); }
+}
+
+/* Landscape phones: prioritize width for the sidebar over map height. */
+@media (max-width: 900px) and (orientation: landscape) {
+  #app.visible{ flex-direction:row; }
+  #map{ height:100vh; flex:1; }
+  #sidebar{ border-top:none; border-left:1px solid var(--line); width:300px; flex-shrink:0; }
+    }
+                  
