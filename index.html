@@ -8,6 +8,13 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<!-- These three cut the connection-setup delay (DNS + TLS handshake) for
+     the map tiles, the Leaflet library, and the Firebase SDK — the
+     browser starts that handshake immediately instead of waiting until
+     each resource is actually requested. -->
+<link rel="preconnect" href="https://unpkg.com">
+<link rel="preconnect" href="https://basemaps.cartocdn.com" crossorigin>
+<link rel="preconnect" href="https://www.gstatic.com" crossorigin>
 
 <link rel="stylesheet" href="style.css" />
 </head>
@@ -135,13 +142,66 @@
     </div>
 
     <div class="panel">
+      <h2>CONNECTIVITY</h2>
+      <div class="row">
+        <label>WiFi</label>
+        <label class="switch">
+          <input type="checkbox" id="wifiEnabledToggle" onchange="setConnectivityToggle('wifiEnabled', this.checked)" />
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="row">
+        <label>Bluetooth provisioning</label>
+        <label class="switch">
+          <input type="checkbox" id="bleEnabledToggle" onchange="setConnectivityToggle('bleEnabled', this.checked)" />
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="hint" style="margin-top:6px;">Bluetooth defaults to off — only turn it on while you're actively reconfiguring the device nearby, then switch it back off.</div>
+    </div>
+
+    <div class="panel" id="wifiSettingsPanel" style="display:none;">
+      <h2>WIFI CREDENTIALS (owner only)</h2>
+      <div class="hint" style="margin-bottom:8px;">Re-enter this tracker's PIN to view or change its WiFi network.</div>
+      <input type="text" id="wifiReauthPin" placeholder="6-digit PIN" inputmode="numeric" maxlength="6" style="letter-spacing:4px; text-align:center;" />
+      <button class="full" onclick="unlockWifiSettings()">Unlock</button>
+      <div id="wifiReauthError" style="color:var(--danger); font-size:12px; margin-top:6px; min-height:16px;"></div>
+
+      <div id="wifiFieldsBlock" style="display:none; margin-top:12px;">
+        <input type="text" id="wifiSsidInput" placeholder="WiFi SSID" />
+        <input type="password" id="wifiPasswordInput" placeholder="WiFi password" />
+        <button class="full" onclick="saveWifiCredentials()">Save WiFi credentials</button>
+        <div class="save-msg" id="wifiSaveMsg"></div>
+        <div class="hint" style="margin-top:8px;">Applies within ~15s over the device's current connection (WiFi or GPRS) — no reflash needed.</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>CONFIGURE VIA BLUETOOTH</h2>
+      <div id="bleUnsupported" class="hint" style="display:none;">This browser doesn't support Web Bluetooth (needed: Chrome or Edge, desktop or Android — not Safari/iOS or Firefox). Use the WiFi credentials panel above instead, over an existing connection.</div>
+      <div id="bleSupported" style="display:none;">
+        <div class="hint" style="margin-bottom:8px;">Turn Bluetooth on above first, then connect directly to the device — works even with no internet reaching it yet.</div>
+        <button class="full" onclick="bleConnect()">Connect via Bluetooth</button>
+        <div id="bleStatus" class="hint" style="margin-top:8px;">Not connected</div>
+        <div id="bleFieldsBlock" style="display:none; margin-top:10px;">
+          <input type="text" id="blePinInput" placeholder="6-digit PIN" inputmode="numeric" maxlength="6" style="letter-spacing:4px; text-align:center;" />
+          <button class="full" onclick="bleAuthorize()">Authorize</button>
+          <input type="text" id="bleSsidInput" placeholder="WiFi SSID" style="margin-top:8px;" />
+          <input type="password" id="blePasswordInput" placeholder="WiFi password" />
+          <input type="text" id="bleNumberInput" placeholder="SMS control number, +91XXXXXXXXXX" />
+          <button class="full" onclick="bleApply()">Send &amp; apply</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
       <h2>ALERTS</h2>
       <div id="alertsList"><div class="hint">No alerts yet</div></div>
     </div>
   </div>
 </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
 
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
@@ -152,14 +212,11 @@
 
   // ---------------- YOUR FIREBASE CONFIG ----------------
   const firebaseConfig = {
-  apiKey: "AIzaSyArpsJ8s4ebT2QehOvSzYBKQ_E6HBtyYUw",
-  authDomain: "nexus-tracker-79173.firebaseapp.com",
-  databaseURL: "https://nexus-tracker-79173-default-rtdb.firebaseio.com",
-  projectId: "nexus-tracker-79173",
-  storageBucket: "nexus-tracker-79173.firebasestorage.app",
-  messagingSenderId: "1020445660516",
-  appId: "1:1020445660516:web:8fdbcb0cb358d620a8d671"
-};
+    apiKey: "AIzaSyArpsJ8s4ebT2QehOvSzYBKQ_E6HBtyYUw",
+    authDomain: "nexus-tracker-79173.firebaseapp.com",
+    databaseURL: "https://nexus-tracker-79173-default-rtdb.firebaseio.com",
+    projectId: "nexus-tracker-79173",
+  };
   // --------------------------------------------------------
 
   const app = initializeApp(firebaseConfig);
@@ -170,6 +227,7 @@
   let currentUser = null;
   let activeListenerUnsubs = []; // so switching trackers doesn't stack old listeners
   let lastUpdateTs = 0;
+  let isOwnerOfCurrentDevice = false;
 
   window.doLogin = function () {
     const email = document.getElementById("loginEmail").value;
@@ -347,217 +405,15 @@
     tryConnectToDevice(raw, pin);
   };
 
-  // Validates the key against /registry first (cheap, no secrets involved),
-  // then — if a pin was given — proves the pin is correct by attempting to
-  // write it to /devices/<key>/authorizedUsers/<uid>. Firebase's rules
-  // engine (not this JS) rejects that write unless the value matches the
-  // real pin stored server-side, and this browser is never allowed to read
-  // that real pin directly. See the README for the exact rule.
-  // If no pin is given, we're reconnecting to a tracker this account was
-  // already authorized for (saved-tracker list, last-used key) — no need
-  // to re-prove anything.
-  async function tryConnectToDevice(key, pin) {
-    document.getElementById("keyError").textContent = "";
-    try {
-      const regSnap = await get(ref(db, `registry/${key}`));
-      if (!regSnap.exists()) {
-        document.getElementById("keyError").textContent = "That key wasn't recognized. Check it and try again.";
-        return false;
-      }
-      const meta = regSnap.val();
-
-      if (pin && currentUser) {
-        try {
-          await set(ref(db, `devices/${key}/authorizedUsers/${currentUser.uid}`), pin);
-        } catch (authErr) {
-          document.getElementById("keyError").textContent = "Incorrect PIN for that key.";
-          return false;
-        }
-        await set(ref(db, `users/${currentUser.uid}/trackers/${key}`), {
-          label: meta.label || key,
-          addedAt: Date.now(),
-        });
-      }
-
-      localStorage.setItem("lastTrackerKey", key);
-      connectToDevice(key, meta.label || key);
-      return true;
-    } catch (err) {
-      document.getElementById("keyError").textContent = "Couldn't check that key: " + err.message;
-      return false;
-    }
+  // Same hash the Python generator computes: SHA-256("<key>:<pin>"). The
+  // raw PIN never leaves this browser tab — only the hash travels to
+  // Firebase, matched against devices/<key>/meta/pinHash by the rules
+  // engine itself (see README). Uses the browser's built-in Web Crypto,
+  // no library needed.
+  async function sha256Hex(text) {
+    const bytes = new TextEncoder().encode(text);
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, "0")).join("");
   }
 
-  function connectToDevice(key, label) {
-    activeListenerUnsubs.forEach((unsub) => unsub());
-    activeListenerUnsubs = [];
-
-    DEVICE_ID = key;
-    document.getElementById("deviceLabel").textContent = label || key;
-    document.getElementById("keyScreen").style.display = "none";
-    document.getElementById("app").classList.add("visible");
-
-    // Reset per-device UI state so the previous tracker's trail/markers don't linger
-    if (trail) trail.setLatLngs([]);
-    lastUpdateTs = 0;
-
-    startTracking();
-  }
-
-  let map, marker, trail, geofenceCircle;
-  let geofenceDrawMode = false;
-  let mapReady = false;
-  let pendingGeofence = null;
-
-    function initMap() {
-    if (mapReady) return;
-    mapReady = true;
-    map = L.map('map', { zoomControl: true }).setView([20.5937, 78.9629], 5);
-    
-    // API key අවශ්‍ය නොවන නොමිලේ ක්‍රියාත්මක වන OpenStreetMap tiles වෙත මාරු කිරීම
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap contributors', maxZoom: 19
-    }).addTo(map);
-
-    const carIcon = L.divIcon({
-      className: '',
-      html: '<div style="width:14px;height:14px;border-radius:50%;background:#39FF88;box-shadow:0 0 10px #39FF88;border:2px solid #0B0F12;"></div>',
-      iconSize: [18, 18], iconAnchor: [9, 9]
-    });
-    marker = L.marker([20.5937, 78.9629], { icon: carIcon }).addTo(map);
-    trail = L.polyline([], { color: '#39FF88', weight: 2, opacity: 0.5 }).addTo(map);
-
-    map.on('click', (e) => {
-      if (!geofenceDrawMode) return;
-      pendingGeofence = e.latlng;
-      drawGeofenceCircle(e.latlng, Number(document.getElementById('geofenceRadius').value));
-    });
-  }
-  initMap();
-
-  window.toggleGeofenceDrawing = function (on) { geofenceDrawMode = on; };
-
-  function drawGeofenceCircle(latlng, radius) {
-    if (geofenceCircle) map.removeLayer(geofenceCircle);
-    geofenceCircle = L.circle(latlng, { radius, color: '#F2A93B', fillOpacity: 0.08 }).addTo(map);
-  }
-
-  window.saveGeofence = function () {
-    const radius = Number(document.getElementById('geofenceRadius').value);
-    const patch = { geofenceRadius: radius };
-    if (pendingGeofence) { patch.geofenceLat = pendingGeofence.lat; patch.geofenceLng = pendingGeofence.lng; }
-    update(ref(db, `devices/${DEVICE_ID}/config`), patch);
-  };
-
-  function startTracking() {
-    const locRef = ref(db, `devices/${DEVICE_ID}/location`);
-    activeListenerUnsubs.push(onValue(locRef, (snap) => {
-      const d = snap.val();
-      if (!d) return;
-      lastUpdateTs = Date.now();
-
-      const latlng = [d.lat, d.lng];
-      marker.setLatLng(latlng);
-      map.panTo(latlng, { animate: true });
-      trail.addLatLng(latlng);
-
-      document.getElementById('statSpeed').textContent = (d.speed ?? 0).toFixed(1) + ' km/h';
-      document.getElementById('statSats').textContent = d.sats ?? '--';
-      document.getElementById('statConn').textContent = (d.connMode || '--').toUpperCase();
-      document.getElementById('statSignal').textContent = (d.signalPct != null && d.signalPct >= 0) ? d.signalPct + '%' : 'n/a';
-      document.getElementById('statTrip').textContent = d.tripMeters ? (d.tripMeters/1000).toFixed(2) + ' km' : '0 km';
-
-      const parkedEl = document.getElementById('statParked');
-      parkedEl.textContent = d.parked ? 'PARKED' : 'MOVING';
-      parkedEl.className = 'value mono ' + (d.parked ? '' : 'live');
-
-      document.getElementById('lostModeToggle').checked = !!d.lostMode;
-    }, (err) => {
-      if (err.code === 'PERMISSION_DENIED') {
-        document.getElementById('keyError').textContent = 'Access to that tracker was refused — enter its key and PIN again.';
-        showKeyScreen();
-      }
-    }));
-
-    const histRef = query(ref(db, `devices/${DEVICE_ID}/history`), limitToLast(200));
-    activeListenerUnsubs.push(onValue(histRef, (snap) => {
-      const points = [];
-      snap.forEach(child => { const v = child.val(); if (v.lat && v.lng) points.push([v.lat, v.lng]); });
-      if (points.length) trail.setLatLngs(points);
-    }));
-
-    const cfgRef = ref(db, `devices/${DEVICE_ID}/config`);
-    activeListenerUnsubs.push(onValue(cfgRef, (snap) => {
-      const c = snap.val();
-      if (!c) return;
-      if (c.intervalSeconds) {
-        document.getElementById('intervalSlider').value = c.intervalSeconds;
-        document.getElementById('intervalLabel').textContent = formatInterval(c.intervalSeconds);
-      }
-      if (c.geofenceLat && c.geofenceLng) drawGeofenceCircle({ lat: c.geofenceLat, lng: c.geofenceLng }, c.geofenceRadius || 500);
-      if (c.smsAllowedNumber && document.activeElement.id !== 'smsNumberInput') {
-        document.getElementById('smsNumberInput').value = c.smsAllowedNumber;
-      }
-    }));
-
-    const alertsRef = query(ref(db, `devices/${DEVICE_ID}/alerts`), limitToLast(20));
-    activeListenerUnsubs.push(onValue(alertsRef, (snap) => {
-      const items = [];
-      snap.forEach(child => items.unshift(child.val()));
-      const el = document.getElementById('alertsList');
-      if (!items.length) { el.innerHTML = '<div class="hint">No alerts yet</div>'; return; }
-      el.innerHTML = items.map(a => `
-        <div class="alert-item">
-          <div class="type">${a.type || 'alert'}</div>
-          <div>${a.message || ''}</div>
-          <div class="time">${new Date((a.ts||0)*1000).toLocaleString()}</div>
-        </div>`).join('');
-    }));
-
-    if (!window._connBadgeTimerStarted) {
-      window._connBadgeTimerStarted = true;
-      setInterval(() => {
-        const badge = document.getElementById('connBadge');
-        const text = document.getElementById('connText');
-        if (!lastUpdateTs) { badge.className = ''; text.textContent = 'waiting for data'; return; }
-        const ageSec = (Date.now() - lastUpdateTs) / 1000;
-        if (ageSec < 30) { badge.className = 'online'; text.textContent = 'live'; }
-        else if (ageSec < 300) { badge.className = 'stale'; text.textContent = 'stale (' + Math.round(ageSec) + 's)'; }
-        else { badge.className = ''; text.textContent = 'offline'; }
-      }, 1000);
-    }
-  }
-
-  window.setLostMode = function (on) { update(ref(db, `devices/${DEVICE_ID}/config`), { lostMode: on }); };
-
-  window.saveInterval = function () {
-    const seconds = Number(document.getElementById('intervalSlider').value);
-    update(ref(db, `devices/${DEVICE_ID}/config`), { intervalSeconds: seconds });
-    const msg = document.getElementById('intervalSaveMsg');
-    msg.textContent = 'Saved — device applies this within ~15s';
-    setTimeout(() => msg.textContent = '', 3000);
-  };
-
-  window.saveSmsNumber = function () {
-    const number = document.getElementById('smsNumberInput').value.trim();
-    const msg = document.getElementById('smsNumberSaveMsg');
-    if (!number.startsWith('+') || number.length < 8) {
-      msg.style.color = 'var(--danger)';
-      msg.textContent = 'Use international format, e.g. +91XXXXXXXXXX';
-      return;
-    }
-    update(ref(db, `devices/${DEVICE_ID}/config`), { smsAllowedNumber: number });
-    msg.style.color = 'var(--live)';
-    msg.textContent = 'Saved — device applies this within ~15s';
-    setTimeout(() => msg.textContent = '', 3000);
-  };
-
-  window.formatInterval = function (seconds) {
-    seconds = Number(seconds);
-    if (seconds < 60) return seconds + 's';
-    const m = Math.floor(seconds / 60), s = seconds % 60;
-    return m + 'm ' + s + 's';
-  };
-</script>
-</body>
-</html>
+  // Validates the key against /registry first (cheap, no secrets
