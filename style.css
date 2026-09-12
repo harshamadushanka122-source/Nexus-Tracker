@@ -31,7 +31,8 @@
 
   #app{ display:none; height:100vh; grid-template-columns: 1fr 340px; }
   #app.visible{ display:grid; }
-  #map{ height:100vh; filter: saturate(0.85) brightness(0.9); }
+  #map{ height:100vh; filter: brightness(0.8) invert(100%) contrast(90%) hue-rotate(200deg) saturate(0.3); }
+
 
   #sidebar{ background:var(--panel); border-left:1px solid var(--line); display:flex; flex-direction:column; height:100vh; overflow-y:auto; }
   .side-header{ padding:16px 18px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; }
